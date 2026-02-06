@@ -1,4 +1,4 @@
-function [dXdt, P_cushion_out] = model_jeff_b(t, X, cmd_rudder_angle) 
+function [dXdt, P_cushion_out] = model_jeff_b(t, X, cmd_rudder_angle, wind_param) 
     %% --- 单位转换系数 ---
     FT2M = 0.3048;          % feet to meters
     SLUG2KG = 14.5939;      % slugs to kg
@@ -57,7 +57,7 @@ function [dXdt, P_cushion_out] = model_jeff_b(t, X, cmd_rudder_angle)
     end
 
     
-    if t > 30
+    if t > 100
         rudder_angle_deg = cmd_rudder_angle;
     else
         rudder_angle_deg = 0;
@@ -65,8 +65,11 @@ function [dXdt, P_cushion_out] = model_jeff_b(t, X, cmd_rudder_angle)
 
     rudder_angle_rad = deg2rad(rudder_angle_deg);
     
-    true_wind_speed_si = 0;       % 真风速
-    true_wind_direction_si = deg2rad(90);   % 真风来向
+%     true_wind_speed_si = 0;       % 真风速
+%     true_wind_direction_si = deg2rad(90);   % 真风来向
+    [true_wind_speed_si, true_wind_direction_si] = Get_Wind_Step(t, wind_param);
+
+
 
     %% 气垫几何参数
     % 气垫分布几何 
@@ -319,7 +322,7 @@ function [dXdt, P_cushion_out] = model_jeff_b(t, X, cmd_rudder_angle)
     Rho_water = 1025;
     
     X_skirt_si = -0.5 * Rho_water * 0.25 * Area_wet_surge * u * abs(u);
-    Y_skirt_si = -0.5 * Rho_water * 0.25 * Area_wet_sway  * v * abs(v);
+    Y_skirt_si = -0.5 * Rho_water * 3 * Area_wet_sway  * v * abs(v);
 
 
     Z_arm_skirt = 1.5; % 阻力作用点到重心的垂直距离 (米)
