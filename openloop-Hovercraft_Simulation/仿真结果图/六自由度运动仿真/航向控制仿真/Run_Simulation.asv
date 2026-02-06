@@ -1,0 +1,515 @@
+%% 气垫船6DOF仿真 
+% clear; clc; close all;
+% 
+% %% 初始状态定义
+% % 状态向量 X = [x, y, z, phi, theta, psi, u, v, w, p, q, r]
+% 
+% x0 = 0;      % 北向位置 (m)
+% y0 = 0;      % 东向位置 (m)
+% z0 = 1.5;   % 垂向位移 (m)
+% phi0 = 0;    % 横摇角 (rad)
+% theta0 = 0;  % 纵摇角 (rad)
+% psi0 = deg2rad(0); % 初始艏向 (rad)，0度为正北
+% 
+% 
+% % --- 速度 ---
+% u0 = 0;      % 纵向速度 (m/s)
+% v0 = 0;      % 横向速度 (m/s)
+% w0 = 0;      % 垂向速度 (m/s)
+% p0 = 0;      % 横摇角速度 (rad/s)
+% q0 = 0;      % 纵摇角速度 (rad/s)
+% r0 = 0;      % 艏摇角速度 (rad/s)
+% 
+% 
+% % 组装初始状态向量
+% X0 = [x0, y0, z0, phi0, theta0, psi0, u0, v0, w0, p0, q0, r0];
+% 
+% %%
+% % 控制指令
+% rudder_angle = 0; % 舵角指令
+% target_u = 9;      % 期望航速u(m/s)
+% dot_target_u = 0;   % 期望加速度
+% target_psi = deg2rad(30); % 期望航向
+% 
+% 
+% %% 使用4阶龙格库塔法
+% % 定义时间步长和总时长
+% dt = 0.05;              
+% T_end = 200;            % 仿真结束时间
+% t = 0:dt:T_end;         % 生成时间向量
+% num_steps = length(t);  % 总步数
+% 
+% % 初始化存储数组
+% % 状态矩阵 sol: [行=时间步, 列=12个状态量]
+% sol = zeros(num_steps, 12); 
+% sol(1, :) = X0;         % 填入初始状态
+% 
+% % 压强矩阵 P_hist_Pa: [行=时间步, 列=4个气室]
+% P_hist_Pa = zeros(num_steps, 4);
+% 
+% % 转速历史
+% rpm_hist = zeros(num_steps, 2);  
+% rpm_hist(1, :) = [0, 0];
+% 
+% % 计算初始时刻的压强
+% [~, P_init] = model_jeff_b(t(1), X0', rudder_angle, 900); 
+% P_hist_Pa(1, :) = P_init(:)';
+% 
+% % 控制分配所需的物理参数
+% Y_prop_dist_si = 2.5;   % 螺旋桨离X轴的横向距离 
+% LBF2N = 4.44822;        % 单位转换
+% prop_angle_deg = 15;    % 螺旋桨安装角
+% 
+% % 估算推力系数
+% K_Thrust_Constant = ((338 * 15 + 4.36 * 15^2) * 4.44822) / (1250^2);
+% MAX_RPM = 2500;
+% 
+% fprintf('进行气垫船6自由度仿真...\n');
+% 
+% % RK4循环
+% for k = 1 : num_steps - 1
+%     t_curr = t(k);
+%     X_curr = sol(k, :)'; 
+% 
+%     %% 控制器计算
+%     % 航速控制 
+%     F_surge_req = smc_speed_controller_eso(X_curr, target_u, dot_target_u);
+% %     F_surge_req = smc_speed_controller(X_curr, target_u, dot_target_u);
+% 
+%     % 航向控制 
+%     [Mz_req, ~] = smc_heading_controller(X_curr, target_psi);
+% %     Mz_req = 0; % 操舵回转
+%     
+%     %% 推力分配
+%     % 总推力用于速度，差动推力用于转向
+%     % T_L = 0.5*F + 0.5*dF
+%     % T_R = 0.5*F - 0.5*dF
+%     
+%     thrust_diff = Mz_req / Y_prop_dist_si; % 力矩转为推力差
+%     
+%     T_L_req = 0.5 * (F_surge_req + thrust_diff);
+%     T_R_req = 0.5 * (F_surge_req - thrust_diff);
+%     
+%     % 物理约束 
+%     T_L_req = max(0, T_L_req);
+%     T_R_req = max(0, T_R_req);
+%     
+%     %% 求解转速
+%     rpm_L = sqrt(T_L_req / K_Thrust_Constant);
+%     rpm_R = sqrt(T_R_req / K_Thrust_Constant);
+%     
+%     % RPM 限幅
+%     rpm_L = min(rpm_L, MAX_RPM);
+%     rpm_R = min(rpm_R, MAX_RPM);
+%     
+%     cmd_rpm_vec = [rpm_L, rpm_R];
+%     rpm_hist(k, :) = cmd_rpm_vec; % 记录
+%     
+%     %% 求解器
+%     [dX1, ~] = model_jeff_b(t_curr,          X_curr,              rudder_angle, cmd_rpm_vec);
+%     [dX2, ~] = model_jeff_b(t_curr + 0.5*dt, X_curr + 0.5*dt*dX1, rudder_angle, cmd_rpm_vec);
+%     [dX3, ~] = model_jeff_b(t_curr + 0.5*dt, X_curr + 0.5*dt*dX2, rudder_angle, cmd_rpm_vec);
+%     [dX4, ~] = model_jeff_b(t_curr + dt,     X_curr + dt*dX3,     rudder_angle, cmd_rpm_vec);
+%     
+%     X_next = X_curr + (dt / 6) * (dX1 + 2*dX2 + 2*dX3 + dX4);
+%     sol(k+1, :) = X_next';
+%     
+%     [~, P_out] = model_jeff_b(t(k+1), X_next, rudder_angle, cmd_rpm_vec);
+%     P_hist_Pa(k+1, :) = P_out(:)';
+% end
+% 
+% % 记录
+% rpm_hist(num_steps, :) = rpm_hist(num_steps-1, :);
+% fprintf('仿真完成。\n');
+% 
+% %% 数据解包 
+% % 位置 (m)
+% x_pos = sol(:,1);
+% y_pos = sol(:,2);
+% z_pos = sol(:,3); 
+% 
+% % 姿态 (弧度 -> 角度)
+% phi_deg   = rad2deg(sol(:,4));
+% theta_deg = rad2deg(sol(:,5));
+% psi_deg   = rad2deg(sol(:,6)); 
+% 
+% % 速度 (m/s)
+% u = sol(:,7);
+% v = sol(:,8);
+% w = sol(:,9);
+% 
+% % 角速度 (rad/s -> deg/s)
+% r_rate_deg = rad2deg(sol(:,12));
+% 
+% % 压强数据
+% P_FL = P_hist_Pa(:,1); % 前左
+% P_FR = P_hist_Pa(:,2); % 前右
+% P_RR = P_hist_Pa(:,3); 
+% P_RL = P_hist_Pa(:,4); 
+% 
+% P_static_si = 5218; % 绘图参考线
+% 
+% %% 绘图
+% 
+% 
+% %% 运动学状态
+% figure('Name', 'Kinematics', 'Color', 'w');
+% 
+% figure(1); 
+% plot(t, u, 'LineWidth', 1.5); 
+% title('纵向速度 u (m/s)'); 
+% grid on; 
+% xlabel('时间 (s)');
+% % ylim([0, 25]);
+% 
+% figure(2); 
+% plot(t, v, 'LineWidth', 1.5); 
+% title('横向速度 v (m/s)'); 
+% grid on; 
+% xlabel('时间 (s)');
+% % ylim([-5, 5]);
+% 
+% figure(3); 
+% plot(t, abs(1.524 - z_pos), 'LineWidth', 1.5); 
+% title('垫升高度(m)'); 
+% grid on; xlabel('时间 (s)');
+% 
+% 
+% figure(4);
+% plot(t, psi_deg, 'LineWidth', 1.5); 
+% title('艏向角ψ (deg)'); 
+% grid on; xlabel('时间 (s)');
+% % ylim([-2, 2]);
+% 
+% 
+% figure(5);
+% plot(t, phi_deg, 'LineWidth', 1.5); 
+% title('横摇角 Roll (deg)'); grid on; 
+% xlabel('时间 (s)');
+% ylim([-1.5, 1.5]);
+% 
+% figure(6); 
+% plot(t, theta_deg, 'LineWidth', 1.5); 
+% title('纵摇角 Pitch (deg)'); 
+% grid on; 
+% xlabel('时间 (s)');
+% % ylim([-2, 2]);
+% 
+% %% 运动轨迹
+% figure(7); 
+% set(gcf, 'Name', 'Trajectory', 'Color', 'w');
+% plot(y_pos, x_pos, 'b-', 'LineWidth', 2); hold on;
+% plot(y_pos(1), x_pos(1), 'go', 'MarkerFaceColor', 'g', 'DisplayName', '起点'); 
+% plot(y_pos(end), x_pos(end), 'rs', 'MarkerFaceColor', 'r', 'DisplayName', '终点');
+% 
+% xlabel('东向East(m)'); ylabel('北向North(m)');
+% title('气垫船运动轨迹');
+% axis equal; grid on; legend show;
+% 
+% %% 侧滑角绘图
+% % 计算侧滑角 (Sideslip Angle)
+% beta_rad = atan2(v, u);      % 结果为弧度
+% beta_deg = rad2deg(beta_rad); % 转换为角度
+% 
+% %  绘制侧滑角图像
+% figure(8); 
+% set(gcf, 'Name', 'Sideslip Angle', 'Color', 'w');
+% 
+% plot(t, beta_deg, 'b-', 'LineWidth', 1.5); hold on;
+% yline(0, 'k--', 'LineWidth', 1, 'DisplayName', '无侧滑');
+% 
+% title('气垫船侧滑角 \beta (Sideslip Angle)');
+% xlabel('时间 (s)');
+% ylabel('侧滑角 (deg)');
+% legend('侧滑角 \beta', 'Location', 'best');
+% % ylim([-1.5, 1.5]);
+% grid on;
+% 
+% %%
+% % 转速指令
+% figure(9); 
+% set(gcf, 'Name', 'Control Input Analysis', 'Color', 'w');
+% 
+% plot(t, rpm_hist(:,1), 'r-', 'LineWidth', 1.5, 'DisplayName', '左侧'); hold on;
+% plot(t, rpm_hist(:,2), 'b--', 'LineWidth', 1.5, 'DisplayName', '右测');
+% 
+% % plot(t, rpm_hist(:,1), 'b-', 'LineWidth', 1.5, 'DisplayName', '转速指令');
+% 
+% title('螺旋桨转速指令');
+% xlabel('时间 (s)');
+% ylabel('转速 (RPM)');
+% ylim([0, 2600]);
+% legend('Location', 'best'); % 显示图例
+% grid on;
+% 
+% 
+% %% 气垫压强绘图
+% figure('Name', 'Cushion Pressure Distribution', 'Color', 'w');
+% 
+% % 转换单位 Pa -> kPa 
+% P_scale = 1; 
+% 
+% % 前左气室
+% subplot(2, 2, 1);
+% plot(t, P_FL * P_scale, 'r-', 'LineWidth', 1.5); hold on;
+% yline(P_static_si * P_scale, 'k:', 'LineWidth', 1.2, 'DisplayName', '稳态');
+% ylabel('压强 (Pa)'); xlabel('时间 (s)');
+% title('前左气室 (Front-Left)');
+% grid on; axis tight;
+% 
+% 
+% % 前右气室
+% subplot(2, 2, 2);
+% plot(t, P_FR * P_scale, 'b-', 'LineWidth', 1.5); hold on;
+% yline(P_static_si * P_scale, 'k:', 'LineWidth', 1.2);
+% ylabel('压强 (Pa)'); xlabel('时间 (s)');
+% title('前右气室 (Front-Right)');
+% grid on; axis tight;
+% 
+% 
+% % 后左气室
+% subplot(2, 2, 3);
+% plot(t, P_RL * P_scale, 'r-', 'LineWidth', 1.5); hold on;
+% yline(P_static_si * P_scale, 'k:', 'LineWidth', 1.2);
+% ylabel('压强 (Pa)'); xlabel('时间 (s)');
+% title('后左气室 (Rear-Left)');
+% grid on; axis tight;
+% % ylim(y_limits);
+% 
+% % 后右气室
+% subplot(2, 2, 4);
+% plot(t, P_RR * P_scale, 'b-', 'LineWidth', 1.5); hold on;
+% yline(P_static_si * P_scale, 'k:', 'LineWidth', 1.2);
+% ylabel('压强 (Pa)'); xlabel('时间 (s)');
+% title('后右气室 (Rear-Right)');
+% grid on; axis tight;
+% % ylim(y_limits);
+% 
+% grid on;
+
+% -------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+% -------------------------------------------------------------------------
+%% 气垫船6DOF仿真 - 多工况对比版
+clear; clc; close all;
+
+%% 仿真配置
+target_psi_list = [30, 60, 90]; % 三种期望航向 (角度)
+case_names = {}; % 用于图例
+sim_data = struct(); % 用于存储每次仿真的结果
+
+% 定义绘图样式
+line_colors = {'b', 'b', 'b'}; 
+line_styles = {'-', '-.', ':'};
+
+%% 循环仿真
+for case_idx = 1:length(target_psi_list)
+    % 1. 获取当前工况参数
+    current_target_psi_deg = target_psi_list(case_idx);
+    fprintf('=== 开始仿真 Case %d: 目标航向 %d 度 ===\n', case_idx, current_target_psi_deg);
+    
+    case_names{end+1} = sprintf('期望艏向 %d^{\\circ}', current_target_psi_deg);
+    
+    % 2. 【重要】清除带有 persistent 变量的函数状态
+    % 防止上一次仿真的状态（如积分器、气垫记忆值）影响本次仿真
+    clear model_jeff_b smc_speed_controller_eso smc_heading_controller;
+
+    % 3. 初始状态定义 (重置)
+    x0 = 0; y0 = 0; z0 = 1.5;
+    phi0 = 0; theta0 = 0; psi0 = 0;
+    u0 = 0; v0 = 0; w0 = 0;
+    p0 = 0; q0 = 0; r0 = 0;
+    X0 = [x0, y0, z0, phi0, theta0, psi0, u0, v0, w0, p0, q0, r0];
+
+    % 4. 控制参数
+    rudder_angle = 0; 
+    target_u = 9;       
+    dot_target_u = 0;   
+    target_psi = deg2rad(current_target_psi_deg); % 当前循环的期望航向
+
+    % 5. 时间与求解器设置
+    dt = 0.05;              
+    T_end = 200;            
+    t = 0:dt:T_end;         
+    num_steps = length(t);  
+    
+    % 初始化存储数组
+    sol = zeros(num_steps, 12); 
+    sol(1, :) = X0;         
+    P_hist_Pa = zeros(num_steps, 4);
+    rpm_hist = zeros(num_steps, 2);  
+    
+    % 物理参数
+    Y_prop_dist_si = 2.5;   
+    MAX_RPM = 2500;
+    % 估算推力系数 (简化计算，与原代码一致)
+    K_Thrust_Constant = ((338 * 15 + 4.36 * 15^2) * 4.44822) / (1250^2);
+
+    % 6. 计算初始时刻压强 (初始化 model_jeff_b)
+    [~, P_init] = model_jeff_b(t(1), X0', rudder_angle, 900); 
+    P_hist_Pa(1, :) = P_init(:)';
+
+    % 7. RK4 循环
+    for k = 1 : num_steps - 1
+        t_curr = t(k);
+        X_curr = sol(k, :)'; 
+
+        % --- 控制器 ---
+        % 航速控制 
+        F_surge_req = smc_speed_controller_eso(X_curr, target_u, dot_target_u);
+        
+        % 航向控制 
+        [Mz_req, ~] = smc_heading_controller(X_curr, target_psi);
+        
+        % --- 推力分配 ---
+        thrust_diff = Mz_req / Y_prop_dist_si;
+        T_L_req = 0.5 * (F_surge_req + thrust_diff);
+        T_R_req = 0.5 * (F_surge_req - thrust_diff);
+        
+        T_L_req = max(0, T_L_req);
+        T_R_req = max(0, T_R_req);
+        
+        rpm_L = sqrt(T_L_req / K_Thrust_Constant);
+        rpm_R = sqrt(T_R_req / K_Thrust_Constant);
+        
+        rpm_L = min(rpm_L, MAX_RPM);
+        rpm_R = min(rpm_R, MAX_RPM);
+        
+        cmd_rpm_vec = [rpm_L, rpm_R];
+        rpm_hist(k, :) = cmd_rpm_vec;
+        
+        % --- 求解器 (RK4) ---
+        [dX1, ~] = model_jeff_b(t_curr,          X_curr,              rudder_angle, cmd_rpm_vec);
+        [dX2, ~] = model_jeff_b(t_curr + 0.5*dt, X_curr + 0.5*dt*dX1, rudder_angle, cmd_rpm_vec);
+        [dX3, ~] = model_jeff_b(t_curr + 0.5*dt, X_curr + 0.5*dt*dX2, rudder_angle, cmd_rpm_vec);
+        [dX4, ~] = model_jeff_b(t_curr + dt,     X_curr + dt*dX3,     rudder_angle, cmd_rpm_vec);
+        
+        X_next = X_curr + (dt / 6) * (dX1 + 2*dX2 + 2*dX3 + dX4);
+        sol(k+1, :) = X_next';
+        
+        [~, P_out] = model_jeff_b(t(k+1), X_next, rudder_angle, cmd_rpm_vec);
+        P_hist_Pa(k+1, :) = P_out(:)';
+    end
+    rpm_hist(num_steps, :) = rpm_hist(num_steps-1, :); % 补齐最后一位
+
+    % 8. 数据解包与存储
+    sim_data(case_idx).t = t;
+    sim_data(case_idx).x = sol(:,1);
+    sim_data(case_idx).y = sol(:,2);
+    sim_data(case_idx).z = sol(:,3);
+    sim_data(case_idx).phi_deg = rad2deg(sol(:,4));
+    sim_data(case_idx).theta_deg = rad2deg(sol(:,5));
+    sim_data(case_idx).psi_deg = rad2deg(sol(:,6));
+    sim_data(case_idx).u = sol(:,7);
+    sim_data(case_idx).v = sol(:,8);
+    
+
+    u_temp = sol(:,7);
+    v_temp = sol(:,8);
+    
+    beta_rad = atan2(v_temp, u_temp);
+    
+    % 计算合速度 (Total Speed)
+    U_total = sqrt(u_temp.^2 + v_temp.^2);
+   
+    stop_threshold = 0.5; 
+    
+    % 将低速时刻的侧滑角强制置为 0
+    beta_rad(U_total < stop_threshold) = 0; 
+    
+    sim_data(case_idx).beta_deg = rad2deg(beta_rad);
+    
+    fprintf('Case %d 完成。\n', case_idx);
+end
+
+%% 绘图 - 对比分析
+fprintf('正在绘图...\n');
+
+% 1. 运动轨迹 (Trajectory)
+figure('Name', 'Trajectory Comparison', 'Color', 'w'); hold on;
+for i = 1:length(target_psi_list)
+    plot(sim_data(i).y, sim_data(i).x, ...
+        'Color', line_colors{i}, 'LineStyle', line_styles{i}, 'LineWidth', 2);
+end
+% 标记起点
+plot(sim_data(1).y(1), sim_data(1).x(1), 'ko', 'MarkerFaceColor', 'k', 'DisplayName', 'Start');
+xlabel('East (m)'); ylabel('North (m)');
+title('气垫船轨迹');
+grid on; axis equal;
+legend(case_names, 'Location', 'best');
+
+% 2. 纵向速度 (Surge Speed u)
+figure('Name', 'Surge Speed Comparison', 'Color', 'w'); hold on;
+for i = 1:length(target_psi_list)
+    plot(sim_data(i).t, sim_data(i).u, ...
+        'Color', line_colors{i}, 'LineStyle', line_styles{i}, 'LineWidth', 1.5);
+end
+xlabel('时间 (s)'); ylabel('纵向速度 u (m/s)');
+title('纵向航速对比');
+grid on; legend(case_names, 'Location', 'best');
+
+% 3. 横向速度 (Sway Speed v)
+figure('Name', 'Sway Speed Comparison', 'Color', 'w'); hold on;
+for i = 1:length(target_psi_list)
+    plot(sim_data(i).t, sim_data(i).v, ...
+        'Color', line_colors{i}, 'LineStyle', line_styles{i}, 'LineWidth', 1.5);
+end
+xlabel('时间 (s)'); ylabel('横向速度 v (m/s)');
+title('横向速度对比');
+grid on; legend(case_names, 'Location', 'best');
+
+% 4. 艏向角 (Heading Psi)
+figure('Name', 'Heading Comparison', 'Color', 'w'); hold on;
+for i = 1:length(target_psi_list)
+    plot(sim_data(i).t, sim_data(i).psi_deg, ...
+        'Color', line_colors{i}, 'LineStyle', line_styles{i}, 'LineWidth', 1.5);
+end
+xlabel('时间 (s)'); ylabel('艏向角 \psi (deg)');
+title('艏向角响应对比');
+grid on; legend(case_names, 'Location', 'best');
+
+% % 5. 横摇角 (Roll Phi)
+% figure('Name', 'Roll Comparison', 'Color', 'w'); hold on;
+% for i = 1:length(target_psi_list)
+%     plot(sim_data(i).t, sim_data(i).phi_deg, ...
+%         'Color', line_colors{i}, 'LineStyle', line_styles{i}, 'LineWidth', 1.5);
+% end
+% xlabel('时间 (s)'); ylabel('横摇角 \phi (deg)');
+% title('横摇角对比');
+% grid on; legend(case_names, 'Location', 'best');
+% 
+% % 6. 纵摇角 (Pitch Theta)
+% figure('Name', 'Pitch Comparison', 'Color', 'w'); hold on;
+% for i = 1:length(target_psi_list)
+%     plot(sim_data(i).t, sim_data(i).theta_deg, ...
+%         'Color', line_colors{i}, 'LineStyle', line_styles{i}, 'LineWidth', 1.5);
+% end
+% xlabel('时间 (s)'); ylabel('纵摇角 \theta (deg)');
+% title('纵摇角对比');
+% grid on; legend(case_names, 'Location', 'best');
+
+% 7. 侧滑角 (Sideslip Beta)
+figure('Name', 'Sideslip Comparison', 'Color', 'w'); hold on;
+for i = 1:length(target_psi_list)
+    plot(sim_data(i).t, sim_data(i).beta_deg, ...
+        'Color', line_colors{i}, 'LineStyle', line_styles{i}, 'LineWidth', 1.5);
+end
+xlabel('时间 (s)'); ylabel('侧滑角 \beta (deg)');
+title('侧滑角对比');
+grid on; legend(case_names, 'Location', 'best');
+
+fprintf('所有绘图完成。\n');
