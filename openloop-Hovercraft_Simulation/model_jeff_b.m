@@ -51,9 +51,10 @@ function [dXdt, P_cushion_out] = model_jeff_b(t, X, cmd_rudder_angle, wind_param
 
 %     propeller_speed_rpm = 1200;
     if t > 10
-        propeller_speed_rpm = 1200;
+%         propeller_speed_rpm = 1200;
+        propeller_speed_rpm = 0;
     else
-        propeller_speed_rpm = 1200;
+        propeller_speed_rpm = 0;
     end
 
     
@@ -93,30 +94,29 @@ function [dXdt, P_cushion_out] = model_jeff_b(t, X, cmd_rudder_angle, wind_param
     
     C_SKRT = 0.0112;                % 围裙刚度系数
     TC = 8.0;                       % 围裙响应时间常数
-    
-%     N_FAN_L = 1500;                 % 左风机转速 RPM
-%     N_FAN_R = 1500;                 % 右风机转速 RPM    
 
-    Target_RPM = 1800;
-%     Run_Up_Time = 20.0; 
-%     
-%     if t < Run_Up_Time
-%         Current_RPM = Target_RPM * (t / Run_Up_Time);
-%     else
-%         Current_RPM = Target_RPM;
-%     end
-
+    Target_RPM_1 = 1500;
     Run_Up_Time = 60.0;
     if t < Run_Up_Time
-        Current_RPM = Target_RPM * (1 - exp(-0.5 * t/1));  % 指数上升，更平滑
+        Current_RPM_1 = Target_RPM_1 * (1 - exp(-0.5 * t/1));  % 指数上升
     else
-        Current_RPM = Target_RPM;
+        Current_RPM_1 = Target_RPM_1;
+    end
+
+    Target_RPM_2 = 2000;
+    Run_Up_Time = 60.0;
+    if t < Run_Up_Time
+        Current_RPM_2 = Target_RPM_2 * (1 - exp(-0.5 * t/1));  % 指数上升
+    else
+        Current_RPM_2 = Target_RPM_2;
     end
     
    
-    N_FAN_L = Current_RPM; 
-    N_FAN_R = Current_RPM;    
-
+    N_FAN_FL = Current_RPM_2; % 前左
+    N_FAN_FR = 800;% Current_RPM_1; % 前右
+    N_FAN_RL = 800;% Current_RPM_1; % 后左
+    N_FAN_RR = 800;% Current_RPM_1; % 后右
+    Fan_RPMs = [N_FAN_FR, N_FAN_FL, N_FAN_RR, N_FAN_RL];
     
 
 %% 空气阻力计算    
@@ -235,7 +235,7 @@ function [dXdt, P_cushion_out] = model_jeff_b(t, X, cmd_rudder_angle, wind_param
     
     % 初始化 
     if isempty(P_last_psf) || t == 0
-        P_last_psf = zeros(6,1); 
+        P_last_psf = zeros(4,1); 
         SD_curr_ft = ones(4,1) * SD_equilibrium_ft; 
         t_last = t;
     end
@@ -286,8 +286,9 @@ function [dXdt, P_cushion_out] = model_jeff_b(t, X, cmd_rudder_angle, wind_param
         S_vec_ft2(i) = L_per_cushion_ft * CLR;
     end
 
+
     [P_cushion_Pa, P_internal_psf] = calc_cushion_pressure(...
-        [N_FAN_R, N_FAN_L], S_vec_ft2', dzdt_vec_ft, P_last_psf);
+        Fan_RPMs, S_vec_ft2', dzdt_vec_ft, P_last_psf);
     
     % 更新记忆变量
     P_last_psf = P_internal_psf;

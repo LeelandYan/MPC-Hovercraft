@@ -93,11 +93,12 @@ w = sol(:,9);
 % 角速度 (rad/s -> deg/s)
 r_rate_deg = rad2deg(sol(:,12));
 
+
 % 压强数据
-P_FL = P_hist_Pa(:,1); % 前左
-P_FR = P_hist_Pa(:,2); % 前右
-P_RR = P_hist_Pa(:,3); 
-P_RL = P_hist_Pa(:,4); 
+P_FL = P_hist_Pa(:,1); % 前左  
+P_FR = P_hist_Pa(:,2); % 前右  
+P_RR = P_hist_Pa(:,3); %      
+P_RL = P_hist_Pa(:,4); %      
 
 P_static_si = 5218; % 绘图参考线
 
@@ -219,19 +220,18 @@ P_scale = 1;
 
 % 前左气室
 subplot(2, 2, 1);
-plot(t, P_FL * P_scale, 'r-', 'LineWidth', 1.5); hold on;
-yline(P_static_si * P_scale, 'k:', 'LineWidth', 1.2, 'DisplayName', '稳态');
+plot(t, P_FR * P_scale, 'r-', 'LineWidth', 1.5); hold on;
+yline(P_static_si * P_scale, 'k:', 'LineWidth', 1.2);
 ylabel('压强 (Pa)'); xlabel('时间 (s)');
-title('前左气室 (Front-Left)');
+title('前左气室 (Front-Right)');
 grid on; axis tight;
-
 
 % 前右气室
 subplot(2, 2, 2);
-plot(t, P_FR * P_scale, 'b-', 'LineWidth', 1.5); hold on;
-yline(P_static_si * P_scale, 'k:', 'LineWidth', 1.2);
+plot(t, P_FL * P_scale, 'b-', 'LineWidth', 1.5); hold on;
+yline(P_static_si * P_scale, 'k:', 'LineWidth', 1.2, 'DisplayName', '稳态');
 ylabel('压强 (Pa)'); xlabel('时间 (s)');
-title('前右气室 (Front-Right)');
+title('前右气室 (Front-Left)');
 grid on; axis tight;
 
 
@@ -253,17 +253,51 @@ title('后右气室 (Rear-Right)');
 grid on; axis tight;
 % ylim(y_limits);
 
+% % 后左气室
+% subplot(2, 2, 3);
+% plot(t, P_RR * P_scale, 'r-', 'LineWidth', 1.5); hold on;
+% yline(P_static_si * P_scale, 'k:', 'LineWidth', 1.2);
+% ylabel('压强 (Pa)'); xlabel('时间 (s)');
+% title('后左气室 (Rear-Left)');
+% grid on; axis tight;
+% % ylim(y_limits);
+% 
+% 
+% % 后右气室
+% subplot(2, 2, 4);
+% plot(t, P_RL * P_scale, 'b-', 'LineWidth', 1.5); hold on;
+% yline(P_static_si * P_scale, 'k:', 'LineWidth', 1.2);
+% ylabel('压强 (Pa)'); xlabel('时间 (s)');
+% title('后右气室 (Rear-Right)');
+% grid on; axis tight;
+% % ylim(y_limits);
+
 grid on;
 
+%% 绘制侧力分量图 ---
+figure('Name', 'Lateral Gravity Force', 'Color', 'w');
+
+% 需要的参数
+m_slugs = 10879.5;
+SLUG2KG = 14.5939;
+m_kg = m_slugs * SLUG2KG;  % 质量转换
+g_SI = 9.80665;            % 重力加速度
+
+% 提取数据,sol(:,4)是横摇角
+phi_rad = sol(:, 4); 
+
+% 计算重力在横向的分量
+% 公式：Fy_g = m * g * sin(phi)
+Y_G_force = m_kg * g_SI * sin(phi_rad);
+
+% 绘图
+plot(t, Y_G_force, 'b-', 'LineWidth', 1.5);
+grid on;
+title('重力侧滑分量', 'FontSize', 12);
+xlabel('时间 Time (s)', 'FontSize', 11);
+ylabel('侧向力 Force (N)', 'FontSize', 11);
 
 % -------------------------------------------------------------------------
-
-
-
-
-
-
-
 
 
 
