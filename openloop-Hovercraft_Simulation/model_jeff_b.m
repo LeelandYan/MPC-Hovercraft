@@ -51,14 +51,14 @@ function [dXdt, P_cushion_out] = model_jeff_b(t, X, cmd_rudder_angle, wind_param
 
 %     propeller_speed_rpm = 1200;
     if t > 10
-%         propeller_speed_rpm = 1200;
-        propeller_speed_rpm = 0;
+        propeller_speed_rpm = 1000;
+%         propeller_speed_rpm = 0;
     else
         propeller_speed_rpm = 0;
     end
 
     
-    if t > 100
+    if t > 10
         rudder_angle_deg = cmd_rudder_angle;
     else
         rudder_angle_deg = 0;
@@ -113,9 +113,9 @@ function [dXdt, P_cushion_out] = model_jeff_b(t, X, cmd_rudder_angle, wind_param
     
    
     N_FAN_FL = Current_RPM_2; % 前左
-    N_FAN_FR = 800;% Current_RPM_1; % 前右
-    N_FAN_RL = 800;% Current_RPM_1; % 后左
-    N_FAN_RR = 800;% Current_RPM_1; % 后右
+    N_FAN_FR = Current_RPM_2; % 前右
+    N_FAN_RL = Current_RPM_1; % 后左
+    N_FAN_RR = Current_RPM_1; % 后右
     Fan_RPMs = [N_FAN_FR, N_FAN_FL, N_FAN_RR, N_FAN_RL];
     
 

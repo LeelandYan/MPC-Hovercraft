@@ -9,7 +9,7 @@ y0 = 0;      % 东向位置 (m)
 z0 = 1.5;   % 垂向位移 (m)
 phi0 = 0;    % 横摇角 (rad)
 theta0 = 0;  % 纵摇角 (rad)
-psi0 = deg2rad(0); % 初始艏向 (rad)，0度为正北
+psi0 = deg2rad(1); % 初始艏向 (rad)，0度为正北
 
 % --- 速度 ---
 u0 = 0;      % 纵向速度 (m/s)
@@ -22,22 +22,44 @@ r0 = 0;      % 艏摇角速度 (rad/s)
 % 组装初始状态向量
 X0 = [x0, y0, z0, phi0, theta0, psi0, u0, v0, w0, p0, q0, r0];
 
+% 定义时间步长和总时长
+dt = 0.05;              
+T_end = 500;            % 仿真结束时间
+t = 0:dt:T_end;         % 生成时间向量
+num_steps = length(t);  % 总步数
+
 %%
 % 设定平均风速，风向
 V_wind_mean = 0.0001; 
-Psi_wind_mean = deg2rad(0); 
+Psi_wind_mean = deg2rad(180); 
 wind_data = Init_Wind(V_wind_mean, Psi_wind_mean);
 
 % 控制指令
 rudder_angle = 0; % 舵角指令
 
-%% 使用4阶龙格库塔法
-% 定义时间步长和总时长
-dt = 0.05;              
-T_end = 100;            % 仿真结束时间
-t = 0:dt:T_end;         % 生成时间向量
-num_steps = length(t);  % 总步数
+%% ================= ALOS 与 MPC 初始化 =================
+% 1. 设定测试航线 (一系列坐标点，单位：米)
+wpt.pos.x = [0, 500, 500, 0]';    % 北向 (North)
+wpt.pos.y = [0, 500, 1500, 2000]'; % 东向 (East)
 
+% 2. ALOS 参数设定
+Delta_h = 80;      % 前视距离 (m)
+gamma_h = 0;   % 自适应积分增益
+R_switch = 150;     % 航点切换半径 (m)
+clear ALOSpsi;     % 清除内部持久化变量，确保航点从头开始
+
+% 3. MPC 参数设定
+Ts_mpc = 0.5;      % MPC 控制周期 (s)
+Np = 10;           % 预测步数
+control_steps = round(Ts_mpc / dt); % 计算间隔步数 (0.5 / 0.05 = 10)
+prev_U = zeros(Np, 1); % 初始化 MPC 控制序列 (热启动用)
+
+% 记录控制数据的数组
+MPC_rudder_history = zeros(num_steps, 1);
+MPC_rudder_history(1) = rudder_angle; % 记录第1步的舵角
+
+
+%% 使用4阶龙格库塔法
 % 初始化存储数组
 % 状态矩阵 sol: [行=时间步, 列=12个状态量]
 sol = zeros(num_steps, 12); 
@@ -58,18 +80,53 @@ for k = 1 : num_steps - 1
     t_curr = t(k);
     X_curr = sol(k, :)'; % 取出为列向量 (12x1)
     
-    % --- RK4迭代 ---
+    %% ================= 新增：MPC 与 ALOS 控制逻辑 =================
+    if mod(k-1, control_steps) == 0
+        % 1. 提取当前观测状态
+        x = X_curr(1); y = X_curr(2); 
+        phi = X_curr(4); theta = X_curr(5); psi = X_curr(6);
+        u = X_curr(7); v = X_curr(8); r = X_curr(12);
+        
+        % 2. 调用 ALOS 获取期望航向
+        [psi_ref, y_e, beta_c_hat, k_active] = ALOSpsi(x, y, Delta_h, gamma_h, Ts_mpc, R_switch, wpt);
+        
+        % 3. 计算路径切向角 pi_h (MPC 预测横向误差需要用到)
+        if k_active < length(wpt.pos.x)
+            pi_h = atan2(wpt.pos.y(k_active+1) - wpt.pos.y(k_active), wpt.pos.x(k_active+1) - wpt.pos.x(k_active));
+        else
+            pi_h = atan2(wpt.pos.y(end) - wpt.pos.y(end-1), wpt.pos.x(end) - wpt.pos.x(end-1));
+        end
+        
+        % 4. 打包输入给 MPC
+        X_mpc = [x; y; psi; u; v; r];
+        ref_data = [y_e; psi_ref; pi_h];
+        
+        % 获取当前环境数据 (风与风机转速)
+        [wind_speed, wind_dir] = Get_Wind_Step(t_curr, wind_data);
+        prop_rpm = 1000; % 预测区间内近似认为风机处于稳定高转速
+        env_data = [phi; theta; wind_speed; wind_dir; prop_rpm];
+        
+        % 5. 运行 MPC 求解最优舵角
+        [opt_rudder_deg, prev_U] = run_hovercraft_nmpc(X_mpc, ref_data, env_data, prev_U, Np, Ts_mpc);
+        
+        % 6. 更新物理引擎的输入
+        rudder_angle = opt_rudder_deg;
+    end
+   
+    % RK4迭代
     [dX1, ~] = model_jeff_b(t_curr,          X_curr,              rudder_angle, wind_data);
     [dX2, ~] = model_jeff_b(t_curr + 0.5*dt, X_curr + 0.5*dt*dX1, rudder_angle, wind_data);
     [dX3, ~] = model_jeff_b(t_curr + 0.5*dt, X_curr + 0.5*dt*dX2, rudder_angle, wind_data);
     [dX4, ~] = model_jeff_b(t_curr + dt,     X_curr + dt*dX3,     rudder_angle, wind_data);
     X_next = X_curr + (dt / 6) * (dX1 + 2*dX2 + 2*dX3 + dX4);
-   
+    
     sol(k+1, :) = X_next';
     
     [~, P_out] = model_jeff_b(t(k+1), X_next, rudder_angle, wind_data);
     P_hist_Pa(k+1, :) = P_out(:)';
-    
+
+    % 记录舵角 =================
+    MPC_rudder_history(k+1) = rudder_angle;
 end
 
 fprintf('仿真完成。\n');
@@ -155,9 +212,25 @@ xlabel('时间 (s)');
 % ylim([-2, 2]);
 
 %% 运动轨迹
+% figure(7); 
+% set(gcf, 'Name', 'Trajectory', 'Color', 'w');
+% plot(y_pos, x_pos, 'b-', 'LineWidth', 2); hold on;
+% plot(y_pos(1), x_pos(1), 'go', 'MarkerFaceColor', 'g', 'DisplayName', '起点'); 
+% plot(y_pos(end), x_pos(end), 'rs', 'MarkerFaceColor', 'r', 'DisplayName', '终点');
+% 
+% xlabel('东向East(m)'); ylabel('北向North(m)');
+% title('气垫船运动轨迹');
+% axis equal; grid on; legend show;
+
 figure(7); 
 set(gcf, 'Name', 'Trajectory', 'Color', 'w');
-plot(y_pos, x_pos, 'b-', 'LineWidth', 2); hold on;
+plot(y_pos, x_pos, 'b-', 'LineWidth', 2, 'DisplayName', '实际轨迹'); hold on;
+
+% ===== 新增：绘制参考航线 =====
+plot(wpt.pos.y, wpt.pos.x, 'k--', 'LineWidth', 1.5, 'DisplayName', '参考路径');
+plot(wpt.pos.y, wpt.pos.x, 'ko', 'MarkerFaceColor', 'y', 'DisplayName', '航点');
+% ==============================
+
 plot(y_pos(1), x_pos(1), 'go', 'MarkerFaceColor', 'g', 'DisplayName', '起点'); 
 plot(y_pos(end), x_pos(end), 'rs', 'MarkerFaceColor', 'r', 'DisplayName', '终点');
 
@@ -275,27 +348,47 @@ grid on; axis tight;
 grid on;
 
 %% 绘制侧力分量图 ---
-figure('Name', 'Lateral Gravity Force', 'Color', 'w');
+% figure('Name', 'Lateral Gravity Force', 'Color', 'w');
+% 
+% % 需要的参数
+% m_slugs = 10879.5;
+% SLUG2KG = 14.5939;
+% m_kg = m_slugs * SLUG2KG;  % 质量转换
+% g_SI = 9.80665;            % 重力加速度
+% 
+% 
+% % phi_rad = sol(:, 4); 
+% theta_rad = sol(:, 5); 
+% 
+% % 计算重力在横向的分量
+% % 公式：Fy_g = m * g * sin(phi)
+% % Y_G_force = m_kg * g_SI * sin(phi_rad);
+% X_G_force = -m_kg * g_SI * sin(theta_rad);
+% 
+% % 绘图
+% % plot(t, Y_G_force, 'b-', 'LineWidth', 1.5);
+% plot(t, X_G_force, 'b-', 'LineWidth', 1.5);
+% grid on;
+% title('重力侧滑分量', 'FontSize', 12);
+% xlabel('时间 Time (s)', 'FontSize', 11);
+% ylabel('侧向力 Force (N)', 'FontSize', 11);
 
-% 需要的参数
-m_slugs = 10879.5;
-SLUG2KG = 14.5939;
-m_kg = m_slugs * SLUG2KG;  % 质量转换
-g_SI = 9.80665;            % 重力加速度
+%% 绘制 MPC 舵角指令图
+figure('Name', 'Rudder Command', 'Color', 'w');
 
-% 提取数据,sol(:,4)是横摇角
-phi_rad = sol(:, 4); 
+plot(t, MPC_rudder_history, 'k-', 'LineWidth', 1.5); hold on;
+% 画出舵角的物理极限线作为参考
+yline(30, 'r--', 'LineWidth', 1.2, 'DisplayName', '物理极限');
+yline(-30, 'r--', 'LineWidth', 1.2, 'HandleVisibility', 'off');
 
-% 计算重力在横向的分量
-% 公式：Fy_g = m * g * sin(phi)
-Y_G_force = m_kg * g_SI * sin(phi_rad);
-
-% 绘图
-plot(t, Y_G_force, 'b-', 'LineWidth', 1.5);
-grid on;
-title('重力侧滑分量', 'FontSize', 12);
+title('MPC 舵角控制指令 \delta', 'FontSize', 12);
 xlabel('时间 Time (s)', 'FontSize', 11);
-ylabel('侧向力 Force (N)', 'FontSize', 11);
+ylabel('指令舵角 (deg)', 'FontSize', 11);
+ylim([-35, 35]); % 稍微留出一点裕度
+legend('Location', 'best');
+grid on;
+
+
 
 % -------------------------------------------------------------------------
 
