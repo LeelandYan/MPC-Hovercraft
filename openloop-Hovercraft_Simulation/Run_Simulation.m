@@ -24,7 +24,7 @@ X0 = [x0, y0, z0, phi0, theta0, psi0, u0, v0, w0, p0, q0, r0];
 
 % 定义时间步长和总时长
 dt = 0.05;              
-T_end = 500;            % 仿真结束时间
+T_end = 400;            % 仿真结束时间
 t = 0:dt:T_end;         % 生成时间向量
 num_steps = length(t);  % 总步数
 
@@ -37,22 +37,23 @@ wind_data = Init_Wind(V_wind_mean, Psi_wind_mean);
 % 控制指令
 rudder_angle = 0; % 舵角指令
 
-%% ================= ALOS 与 MPC 初始化 =================
-% 1. 设定测试航线 (一系列坐标点，单位：米)
-wpt.pos.x = [0, 500, 500, 0]';    % 北向 (North)
-wpt.pos.y = [0, 500, 1500, 2000]'; % 东向 (East)
+%% ALOS 与 MPC 初始化 
+% 设定测试航线 (单位米)
+% wpt.pos.x = [0, 500, 500, 0]';    % 北向 (North)
+% wpt.pos.y = [0, 500, 1500, 2000]'; % 东向 (East)
+wpt.pos.x = [0, 1500]';    % 北向 (North)
+wpt.pos.y = [0, 1500]'; % 东向 (East)
 
-% 2. ALOS 参数设定
+% LOS 参数设定
 Delta_h = 80;      % 前视距离 (m)
-gamma_h = 0;   % 自适应积分增益
-R_switch = 150;     % 航点切换半径 (m)
-clear ALOSpsi;     % 清除内部持久化变量，确保航点从头开始
+R_switch = 150;    % 航点切换半径 (m)
+clear LOSpsi;    
 
-% 3. MPC 参数设定
+% MPC 参数设定
 Ts_mpc = 0.5;      % MPC 控制周期 (s)
 Np = 10;           % 预测步数
 control_steps = round(Ts_mpc / dt); % 计算间隔步数 (0.5 / 0.05 = 10)
-prev_U = zeros(Np, 1); % 初始化 MPC 控制序列 (热启动用)
+prev_U = zeros(Np, 1); % 初始化 MPC 控制序列 
 
 % 记录控制数据的数组
 MPC_rudder_history = zeros(num_steps, 1);
@@ -60,7 +61,6 @@ MPC_rudder_history(1) = rudder_angle; % 记录第1步的舵角
 
 
 %% 使用4阶龙格库塔法
-% 初始化存储数组
 % 状态矩阵 sol: [行=时间步, 列=12个状态量]
 sol = zeros(num_steps, 12); 
 sol(1, :) = X0;         % 填入初始状态
@@ -80,24 +80,25 @@ for k = 1 : num_steps - 1
     t_curr = t(k);
     X_curr = sol(k, :)'; % 取出为列向量 (12x1)
     
-    %% ================= 新增：MPC 与 ALOS 控制逻辑 =================
+    % MPC与LOS
     if mod(k-1, control_steps) == 0
-        % 1. 提取当前观测状态
+        % 提取当前观测状态
         x = X_curr(1); y = X_curr(2); 
         phi = X_curr(4); theta = X_curr(5); psi = X_curr(6);
         u = X_curr(7); v = X_curr(8); r = X_curr(12);
         
-        % 2. 调用 ALOS 获取期望航向
-        [psi_ref, y_e, beta_c_hat, k_active] = ALOSpsi(x, y, Delta_h, gamma_h, Ts_mpc, R_switch, wpt);
-        
-        % 3. 计算路径切向角 pi_h (MPC 预测横向误差需要用到)
+        % 调用LOS
+        % [psi_ref, y_e, beta_c_hat, k_active] = ALOSpsi(x, y, Delta_h, gamma_h, Ts_mpc, R_switch, wpt);
+        [psi_ref, y_e, k_active] = LOSpsi(x, y, Delta_h, R_switch, wpt);
+
+        % 计算路径切向角
         if k_active < length(wpt.pos.x)
             pi_h = atan2(wpt.pos.y(k_active+1) - wpt.pos.y(k_active), wpt.pos.x(k_active+1) - wpt.pos.x(k_active));
         else
             pi_h = atan2(wpt.pos.y(end) - wpt.pos.y(end-1), wpt.pos.x(end) - wpt.pos.x(end-1));
         end
         
-        % 4. 打包输入给 MPC
+        % 打包给MPC
         X_mpc = [x; y; psi; u; v; r];
         ref_data = [y_e; psi_ref; pi_h];
         
@@ -106,10 +107,9 @@ for k = 1 : num_steps - 1
         prop_rpm = 1000; % 预测区间内近似认为风机处于稳定高转速
         env_data = [phi; theta; wind_speed; wind_dir; prop_rpm];
         
-        % 5. 运行 MPC 求解最优舵角
+        % 运行 MPC 求解最优舵角
         [opt_rudder_deg, prev_U] = run_hovercraft_nmpc(X_mpc, ref_data, env_data, prev_U, Np, Ts_mpc);
         
-        % 6. 更新物理引擎的输入
         rudder_angle = opt_rudder_deg;
     end
    
@@ -125,7 +125,7 @@ for k = 1 : num_steps - 1
     [~, P_out] = model_jeff_b(t(k+1), X_next, rudder_angle, wind_data);
     P_hist_Pa(k+1, :) = P_out(:)';
 
-    % 记录舵角 =================
+    % 记录舵角
     MPC_rudder_history(k+1) = rudder_angle;
 end
 
@@ -160,7 +160,6 @@ P_RL = P_hist_Pa(:,4); %
 P_static_si = 5218; % 绘图参考线
 
 %% 绘图
-
 
 %% 运动学状态
 figure('Name', 'Kinematics', 'Color', 'w');
