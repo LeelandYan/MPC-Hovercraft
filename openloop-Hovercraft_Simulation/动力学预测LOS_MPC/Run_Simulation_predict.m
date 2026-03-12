@@ -23,7 +23,7 @@ X0 = [x0, y0, z0, phi0, theta0, psi0, u0, v0, w0, p0, q0, r0];
 
 % 定义时间步长和总时长
 dt = 0.05;              
-T_end = 380;            % 仿真结束时间
+T_end = 400;            % 仿真结束时间
 t = 0:dt:T_end;         % 生成时间向量
 num_steps = length(t);  % 总步数
 
@@ -38,12 +38,12 @@ rudder_angle = 0; % 舵角指令
 
 %% LOS与MPC初始化 
 % 航线 (单位米)
-% wpt.pos.x = [0, 1000, 1000, 0]';    % 北向 (North)
-% wpt.pos.y = [0, 1000, 2000, 3000]'; % 东向 (East)
+wpt.pos.x = [0, 1000, 1000, 0]';    % 北向 (North)
+wpt.pos.y = [0, 1000, 2000, 3000]'; % 东向 (East)
 % wpt.pos.x = [0, 500, 500]';    % 北向 (North)
 % wpt.pos.y = [0, 500, 2000]'; % 东向 (East)
-wpt.pos.x = [0, 1500]';    % 北向 (North)
-wpt.pos.y = [0, 1500]'; % 东向 (East)
+% wpt.pos.x = [0, 1500]';    % 北向 (North)
+% wpt.pos.y = [0, 1500]'; % 东向 (East)
 
 % LOS 参数设定
 Delta_h = 180;      % 前视距离 (m)

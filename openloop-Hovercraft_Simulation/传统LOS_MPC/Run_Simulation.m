@@ -30,7 +30,7 @@ num_steps = length(t);  % 总步数
 
 %%
 % 设定平均风速，风向
-V_wind_mean = 5; 
+V_wind_mean = 0.0001; 
 Psi_wind_mean = deg2rad(90); 
 wind_data = Init_Wind(V_wind_mean, Psi_wind_mean);
 
