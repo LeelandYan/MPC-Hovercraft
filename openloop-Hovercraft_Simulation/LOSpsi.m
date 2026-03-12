@@ -1,16 +1,4 @@
 function [psi_ref, y_e, k_active] = LOSpsi(x, y, Delta_h, R_switch, wpt)
-% 基础LOS
-%
-% 输入:   
-%   x, y:     当前的北东坐标 (m)
-%   Delta_h:  前视距离常数 (m)
-%   R_switch: 航路点切换半径 (m)
-%   wpt:      结构体，包含航路点坐标 wpt.pos.x 和 wpt.pos.y
-%
-% 输出:  
-%   psi_ref:  期望航向角 (rad)
-%   y_e:      横向偏迹误差 (m)
-%   k_active: 当前正在追踪的目标航路点索引
 
 persistent k;        % 活跃航路点索引
 persistent xk yk;    % 活跃航路点坐标

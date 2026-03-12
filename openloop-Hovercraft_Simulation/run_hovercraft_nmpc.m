@@ -1,25 +1,13 @@
 function [opt_rudder_deg, U_opt] = run_hovercraft_nmpc(X_curr, ref_data, env_data, prev_U, Np, Ts)
-% 输入参数:
-%   X_curr   : 当前状态向量 [x, y, psi, u, v, r]' 
-%   ref_data : 导引参考数据 [y_e_curr, psi_ref, pi_h]' (横向误差, 期望航向, 路径切向角)
-%   env_data : 外部环境与干扰 [phi, theta, wind_speed, wind_dir, prop_rpm]'
-%   prev_U   : 上一控制周期的最优控制序列 
-%   Np       : 预测步数 
-%   Ts       : MPC 离散时间步长 
-%
-% 输出参数:
-%   opt_rudder_deg : 当前时刻应下发的最佳舵角 (度)
-%   U_opt          : 优化后的整个控制序列，留作下一次的热启动
-
     %% 1. 权重与物理约束定义
     % 代价函数权重矩阵
     Q_ye = 0;     % 横向误差惩罚
-    Q_psie = 100000;  % 航向误差惩罚
-    R_du = 1;      % 舵角变化率惩罚
+    Q_psie = 100;  % 航向误差惩罚
+    R_du = 0.5;      % 舵角变化率惩罚
 
     % 物理约束 
     rudder_max = 30;              % 最大绝对舵角 (度)
-    rudder_rate_max_sec = 15;     % 最大打舵速率 (度/秒)
+    rudder_rate_max_sec = 3;     % 最大打舵速率 (度/秒)
     
     % 转换到离散步长内的增量约束
     max_delta_u = rudder_rate_max_sec * Ts; 
@@ -51,9 +39,9 @@ function [opt_rudder_deg, U_opt] = run_hovercraft_nmpc(X_curr, ref_data, env_dat
 
     %% 3. 求解器配置 (使用 SQP 算法)
     options = optimoptions('fmincon', ...
-        'Algorithm', 'sqp', ...          % 匹配文献中的算法
-        'Display', 'none', ...           % 关闭内部打印以提升速度
-        'MaxIterations', 50, ...         % 限制最大迭代次数
+        'Algorithm', 'sqp', ...          
+        'Display', 'none', ...           
+        'MaxIterations', 50, ...         % 最大迭代次数
         'StepTolerance', 1e-3);          
 
     %% 4. 执行非线性优化
@@ -98,10 +86,10 @@ function J = compute_cost(U, X, ref, env, Np, Ts, Q_ye, Q_psie, R_du, u_last)
         dt_inner = 0.05; 
         num_inner = round(Ts / dt_inner);
         for inner = 1:num_inner
-            % 3. 调用 3-DOF 预测模型计算状态导数
+            % 3. 调用预测模型计算状态导数
             dX = predict_3dof_model(x_k, u_k, env);
             
-            % 4. 前向欧拉积分更新状态 (用 0.05s 的小步长推进)
+            % 4. 前向欧拉积分更新状态
             x_k = x_k + dX * dt_inner;
             
             % 提取临时预测状态
@@ -113,7 +101,7 @@ function J = compute_cost(U, X, ref, env, Np, Ts, Q_ye, Q_psie, R_du, u_last)
             y_e_dot = u_pred * sin(psi_pred - pi_h) + v_pred * cos(psi_pred - pi_h);
             y_e_curr = y_e_curr + y_e_dot * dt_inner;
         end
-        % ================================================================
+
         
         % 7. 计算航向误差 
         psi_err = angdiff(psi_ref, x_k(3));

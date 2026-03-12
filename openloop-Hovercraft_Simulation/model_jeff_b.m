@@ -49,20 +49,25 @@ function [dXdt, P_cushion_out] = model_jeff_b(t, X, cmd_rudder_angle, wind_param
     %% 控制输入 
     propeller_angle = 15;
 
-%     propeller_speed_rpm = 1200;
-    if t > 10
-        propeller_speed_rpm = 1000;
+% %     propeller_speed_rpm = 1200;
+%     if t > 10
+%         propeller_speed_rpm = 1000;
+% %         propeller_speed_rpm = 0;
+%     else
 %         propeller_speed_rpm = 0;
-    else
-        propeller_speed_rpm = 0;
-    end
+%     end
+% 
+%     
+%     if t > 10
+%         rudder_angle_deg = cmd_rudder_angle;
+%     else
+%         rudder_angle_deg = 0;
+%     end
 
-    
-    if t > 10
-        rudder_angle_deg = cmd_rudder_angle;
-    else
-        rudder_angle_deg = 0;
-    end
+
+    propeller_angle = 15;
+    propeller_speed_rpm = 1000;
+    rudder_angle_deg = cmd_rudder_angle;
 
     rudder_angle_rad = deg2rad(rudder_angle_deg);
     
@@ -340,7 +345,7 @@ function [dXdt, P_cushion_out] = model_jeff_b(t, X, cmd_rudder_angle, wind_param
     Mz_skirt_si = -YAWDC_coeff_si * r;    
     
     %% --- 7. 总力与力矩汇总 ---
-    % 重力在各轴分量，近似线性
+    % 重力在各轴分量
     X_G_si = -m_kg * g_SI * theta;
     Y_G_si =  m_kg * g_SI * phi;
     Z_G_si =  m_kg * g_SI;
@@ -348,6 +353,7 @@ function [dXdt, P_cushion_out] = model_jeff_b(t, X, cmd_rudder_angle, wind_param
     % 合力与合力矩
     Fx = X_rudder_si + X_air_si  + X_G_si + X_propeller_thrust_si + X_skirt_si;
     Fy = Y_rudder_si + Y_air_si  + Y_G_si + Y_skirt_si;
+%     Fy = Y_rudder_si + Y_air_si  + Y_skirt_si;
     Fz = Z_cursion_si + Z_G_si;
     
     Mx = Mx_cursion_si + Mx_air_si + Mx_rudder_si + Mx_skirt_moment + Mx_damping;
