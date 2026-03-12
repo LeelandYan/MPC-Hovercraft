@@ -1,10 +1,11 @@
 %% 气垫船6DOF仿真 
-clear all
-clc
+clear all 
+clc 
 close all
 
 %% 初始状态定义
 % 状态向量 X = [x, y, z, phi, theta, psi, u, v, w, p, q, r]
+
 x0 = -100;      % 北向位置 (m)
 y0 = 0;      % 东向位置 (m)
 z0 = 1.5;   % 垂向位移 (m)
@@ -12,8 +13,8 @@ phi0 = 0;    % 横摇角 (rad)
 theta0 = 0;  % 纵摇角 (rad)
 psi0 = deg2rad(1); % 初始艏向 (rad)，0度为正北
 
-% 速度
-u0 = 0;      % 纵向速度 (m/s)
+% --- 速度 ---
+u0 = 0.5;      % 纵向速度 (m/s)
 v0 = 0;      % 横向速度 (m/s)
 w0 = 0;      % 垂向速度 (m/s)
 p0 = 0;      % 横摇角速度 (rad/s)
@@ -25,39 +26,41 @@ X0 = [x0, y0, z0, phi0, theta0, psi0, u0, v0, w0, p0, q0, r0];
 
 % 定义时间步长和总时长
 dt = 0.05;              
-T_end = 600;            % 仿真结束时间
+T_end = 350;            % 仿真结束时间
 t = 0:dt:T_end;         % 生成时间向量
 num_steps = length(t);  % 总步数
 
 %%
 % 设定平均风速，风向
-V_wind_mean = 5; 
-Psi_wind_mean = deg2rad(180); 
+V_wind_mean = 0.0001; 
+Psi_wind_mean = deg2rad(90); 
 wind_data = Init_Wind(V_wind_mean, Psi_wind_mean);
 
 % 控制指令
 rudder_angle = 0; % 舵角指令
 
 %% LOS与MPC初始化 
-% 航线 (单位米)
-wpt.pos.x = [0, 1000, 1000, 2000]';    % 北向 (North)
-wpt.pos.y = [0, 1000, 2500, 3500]'; % 东向 (East)
+% 设定测试航线 (单位米)
+% wpt.pos.x = [0, 500, 500, 0]';    % 北向 (North)
+% wpt.pos.y = [0, 500, 1000, 1500]'; % 东向 (East)
 % wpt.pos.x = [0, 500, 500]';    % 北向 (North)
 % wpt.pos.y = [0, 500, 2000]'; % 东向 (East)
-% wpt.pos.x = [0, 1500]';    % 北向 (North)
-% wpt.pos.y = [0, 1500]'; % 东向 (East)
+wpt.pos.x = [0, 1000]';    % 北向 (North)
+wpt.pos.y = [0, 1000]'; % 东向 (East)
+    
 
-% LOS 参数设定
-Delta_h = 180;      % 前视距离 (m)
-R_switch = 200;    % 航点切换半径 (m)
-clear LOSpsi;    
+% MPC 参数设定
+Ts_mpc = 0.5;      % MPC 控制周期 (s)
+Np = 10;           % 预测步数
+control_steps = round(Ts_mpc / dt); % 计算间隔步数 (0.5 / 0.05 = 10)
+prev_U = zeros(Np, 1); % 初始化 MPC 控制序列 
 
-% MPC 参数设定 (修正非最小相位特性)
-Ts_mpc = 1.0;      % 【修改】: 增大 MPC 控制周期至 1.0s
-Np = 15;           % 【修改】: 增大预测步数至 15 步 (总视野 15s)
-control_steps = round(Ts_mpc / dt); % 计算间隔步数 (1.0 / 0.05 = 20)
-prev_U = zeros(Np, 1); % 初始化 MPC 控制序列
-y_e_int = 0;
+% ALOS 参数设定
+Delta_h = 200;      % 前视距离 (m)
+R_switch = 50;      % 航点切换半径 (m)
+gamma_h = 0.0005;   % ALOS的自适应增益(积分系数)，决定估计侧滑角的收敛速度
+h_alos = Ts_mpc;    % ALOS的离散积分步长(这里与控制周期 0.5s 保持一致)
+clear ALOSpsi;      % ALOSpsi 函数内的持久化变量(persistent)
 
 % 记录控制数据的数组
 MPC_rudder_history = zeros(num_steps, 1);
@@ -95,25 +98,28 @@ for k = 1 : num_steps - 1
         phi = X_curr(4); theta = X_curr(5); psi = X_curr(6);
         u = X_curr(7); v = X_curr(8); r = X_curr(12);
         
-        % 1. 获取当前的 y_e 和 pi_h。
-        [~, y_e, pi_h, ~] = LOSchi(x, y, Delta_h, R_switch, wpt);
+        % 调用ALOS
+        [psi_ref, y_e, beta_c_hat, k_active] = ALOSpsi(x, y, Delta_h, gamma_h, h_alos, R_switch, wpt);
 
-        % 对横向误差进行数值积分
-        y_e_int = y_e_int + y_e * Ts_mpc;
-
-        % 2. 打包状态量和参考数据给MPC 
-        X_mpc = [x; y; psi; u; v; r];
-        ref_data = [y_e; pi_h; y_e_int];
+        % 计算路径切向角
+        if k_active < length(wpt.pos.x)
+            pi_h = atan2(wpt.pos.y(k_active+1) - wpt.pos.y(k_active), wpt.pos.x(k_active+1) - wpt.pos.x(k_active));
+        else
+            pi_h = atan2(wpt.pos.y(end) - wpt.pos.y(end-1), wpt.pos.x(end) - wpt.pos.x(end-1));
+        end
         
-        % 3. 获取当前环境数据
+        % 打包给MPC
+        X_mpc = [x; y; psi; u; v; r];
+        ref_data = [y_e; psi_ref; pi_h];
+        
+ 
         [wind_speed, wind_dir] = Get_Wind_Step(t_curr, wind_data);
-        prop_rpm = 1000; 
+        prop_rpm = 1000; % 螺旋桨转速
         env_data = [phi; theta; wind_speed; wind_dir; prop_rpm];
         
-        % 4. 运行MPC求解器
-        [opt_rudder_deg, prev_U] = run_hovercraft_nmpc_predict(X_mpc, ref_data, env_data, prev_U, Np, Ts_mpc);
+        % 运行 MPC 求解最优舵角
+        [opt_rudder_deg, prev_U] = run_hovercraft_nmpc(X_mpc, ref_data, env_data, prev_U, Np, Ts_mpc);
         
-        % 5. 下发舵角指令
         rudder_angle = opt_rudder_deg;
     end
    
@@ -168,46 +174,46 @@ P_static_si = 5218; % 绘图参考线
 %% 运动学状态
 figure('Name', 'Kinematics', 'Color', 'w');
 
-% figure(1); 
-subplot(3, 2, 1); 
+figure(1); 
+% subplot(3, 2, 1); 
 plot(t, u, 'LineWidth', 1.5); 
 title('纵向速度 u (m/s)'); 
 grid on; 
 xlabel('时间 (s)');
 % ylim([-10, 10]);
 
-% figure(2); 
-subplot(3, 2, 2); 
+figure(2); 
+% subplot(3, 2, 2); 
 plot(t, v, 'LineWidth', 1.5); 
 title('横向速度 v (m/s)'); 
 grid on; 
 xlabel('时间 (s)');
 % ylim([-5, 5]);
 
-% figure(3); 
-subplot(3, 2, 3); 
+figure(3); 
+% subplot(3, 2, 3); 
 plot(t, abs(1.524 - z_pos), 'LineWidth', 1.5); 
 title('垫升高度(m)'); 
 grid on; xlabel('时间 (s)');
 
 
-% figure(4);
-subplot(3, 2, 4); 
+figure(4);
+% subplot(3, 2, 4); 
 plot(t, psi_deg, 'LineWidth', 1.5); 
 title('艏向角ψ (deg)'); 
 grid on; xlabel('时间 (s)');
 % ylim([-2, 2]);
 
 
-% figure(5);
-subplot(3, 2, 5); 
+figure(5);
+% subplot(3, 2, 5); 
 plot(t, phi_deg, 'LineWidth', 1.5); 
 title('横摇角 Roll (deg)'); grid on; 
 xlabel('时间 (s)');
 % ylim([-1.5, 1.5]);
 
-% figure(6); 
-subplot(3, 2, 6); 
+figure(6); 
+% subplot(3, 2, 6); 
 plot(t, theta_deg, 'LineWidth', 1.5); 
 title('纵摇角 Pitch (deg)'); 
 grid on; 
@@ -389,3 +395,177 @@ ylabel('指令舵角 (deg)', 'FontSize', 11);
 ylim([-35, 35]); % 稍微留出一点裕度
 legend('Location', 'best');
 grid on;
+
+
+
+% -------------------------------------------------------------------------
+
+
+
+
+
+
+
+
+% -------------------------------------------------------------------------
+% %% 打舵回转对比
+% clear; clc; close all;
+% 
+% %% 仿真设置
+% % 定义要对比的舵角列表
+% rudder_test_values = [5, 10, 15]; 
+% line_colors = {'b', 'b', 'b'};     % 对应颜色：全为蓝色
+% % --- 新增：定义线型列表 ---
+% % '-' = 实线, '--' = 虚线, ':' = 点线
+% line_styles = {'-', '--', ':'};    
+% 
+% % 初始化风 ---
+% V_wind_mean = 3;              % 平均风速 (m/s)
+% Psi_wind_mean = deg2rad(90);   % 平均风向 (rad)
+% % 请确保您的目录下有 Init_Wind 函数
+% wind_data = Init_Wind(V_wind_mean, Psi_wind_mean); 
+% 
+% % 定义时间步长和总时长
+% dt = 0.1;               
+% T_end = 400;            
+% t = 0:dt:T_end;          
+% num_steps = length(t);  
+% 
+% %% 准备绘图
+% % 轨迹对比
+% fig_traj = figure('Name', 'Trajectory Comparison', 'Color', 'w');
+% hold on; grid on; axis equal;
+% xlabel('东向 East (m)'); ylabel('北向 North (m)');
+% title('气垫船运动轨迹');
+% 
+% % 侧滑角对比
+% fig_beta = figure('Name', 'Sideslip Angle Comparison', 'Color', 'w');
+% hold on; grid on;
+% xlabel('时间 (s)'); ylabel('侧滑角 (deg)');
+% title('侧滑角');
+% 
+% % 纵向速度对比
+% fig_u = figure('Name', 'Surge Velocity Comparison', 'Color', 'w');
+% hold on; grid on;
+% xlabel('时间 (s)'); ylabel('纵向速度 u (m/s)');
+% title('纵向速度');
+% 
+% % 横向速度对比
+% fig_v = figure('Name', 'Sway Velocity Comparison', 'Color', 'w');
+% hold on; grid on;
+% xlabel('时间 (s)'); ylabel('横向速度 v (m/s)');
+% title('横向速度');
+% 
+% % 艏向角对比图
+% fig_psi = figure('Name', 'Heading Angle Comparison', 'Color', 'w');
+% hold on; grid on;
+% xlabel('时间 (s)'); ylabel('艏向角 \psi (deg) [0-360]');
+% title('艏向角对比 (Heading)');
+% ylim([0, 360]); % 锁定Y轴范围，方便观察罗盘方位
+% yticks(0:45:360); % 设置刻度间隔，符合航海习惯
+% 
+% %% 循环
+% for i = 1:length(rudder_test_values)
+%     
+%     % --- 获取当前工况参数 ---
+%     current_angle = rudder_test_values(i);
+%     current_color = line_colors{i};
+%     % --- 新增：获取当前线型 ---
+%     current_style = line_styles{i};
+% 
+%     fprintf('正在进行舵角 = %d 度的仿真...\n', current_angle);
+%     
+%     clear model_jeff_b; 
+%     
+%     % --- 初始状态定义 (每次都要重置) ---
+%     x0 = 0; y0 = 0; z0 = 1.5;   
+%     phi0 = 0; theta0 = 0; psi0 = deg2rad(0); 
+%     u0 = 0; v0 = 0; w0 = 0;     
+%     p0 = 0; q0 = 0; r0 = 0;     
+%     X0 = [x0, y0, z0, phi0, theta0, psi0, u0, v0, w0, p0, q0, r0];
+%     
+%     % 初始化存储数组
+%     sol = zeros(num_steps, 12); 
+%     sol(1, :) = X0;          
+% 
+%     % --- 龙格库塔循环 ---
+%     for k = 1 : num_steps - 1
+%             t_curr = t(k);
+%             X_curr = sol(k, :)'; 
+%             
+%             % 传递 wind_data 参数
+%             [dX1, ~] = model_jeff_b(t_curr,          X_curr,               current_angle, wind_data);
+%             [dX2, ~] = model_jeff_b(t_curr + 0.5*dt, X_curr + 0.5*dt*dX1, current_angle, wind_data);
+%             [dX3, ~] = model_jeff_b(t_curr + 0.5*dt, X_curr + 0.5*dt*dX2, current_angle, wind_data);
+%             [dX4, ~] = model_jeff_b(t_curr + dt,     X_curr + dt*dX3,     current_angle, wind_data);
+%             
+%             X_next = X_curr + (dt / 6) * (dX1 + 2*dX2 + 2*dX3 + dX4);
+%             sol(k+1, :) = X_next';
+%      end
+%     
+%     %% 数据解包
+%     x_pos = sol(:,1);
+%     y_pos = sol(:,2);
+%     u_vel = sol(:,7);
+%     v_vel = sol(:,8);
+% 
+%     % 艏向角处理 
+%     psi_rad = sol(:,6); 
+%     psi_deg_raw = rad2deg(psi_rad);      % 原始角度
+%     psi_deg_360 = mod(psi_deg_raw, 360); % 取模运算，映射到 0-360
+%     
+%     % 计算侧滑角
+%     beta_deg = rad2deg(atan2(v_vel, u_vel));
+% 
+%     % --- 绘图部分 (增加了 LineStyle 和调整了 LineWidth) ---
+%     
+%     % 绘制轨迹 
+%     figure(fig_traj);
+%     plot(y_pos, x_pos, 'LineWidth', 1.5, 'LineStyle', current_style, 'Color', current_color, ...
+%          'DisplayName', sprintf('舵角 %d^{\\circ}', current_angle));
+%     % 标记终点
+%     plot(y_pos(end), x_pos(end), 's', 'MarkerFaceColor', current_color, 'HandleVisibility', 'off');
+% 
+%     % 绘制侧滑角
+%     figure(fig_beta);
+%     plot(t, beta_deg, 'LineWidth', 1.5, 'LineStyle', current_style, 'Color', current_color, ...
+%          'DisplayName', sprintf('舵角 %d^{\\circ}', current_angle));
+% 
+%     % 纵向速度
+%     figure(fig_u);
+%     plot(t, u_vel, 'LineWidth', 1.5, 'LineStyle', current_style, 'Color', current_color, ...
+%          'DisplayName', sprintf('舵角 %d^{\\circ}', current_angle));
+% 
+%     % 横向速度
+%     figure(fig_v);
+%     plot(t, v_vel, 'LineWidth', 1.5, 'LineStyle', current_style, 'Color', current_color, ...
+%          'DisplayName', sprintf('舵角 %d^{\\circ}', current_angle));
+% 
+%     % 艏向角
+%     figure(fig_psi);
+%     plot(t, psi_deg_360, 'LineWidth', 1.5, 'LineStyle', current_style, 'Color', current_color, ...
+%          'DisplayName', sprintf('舵角 %d^{\\circ}', current_angle));
+% 
+% end
+% 
+% % 轨迹图装饰
+% figure(fig_traj);
+% plot(0, 0, 'ko', 'MarkerFaceColor', 'k', 'DisplayName', '起点', 'MarkerSize', 10); % 起点加大一点
+% legend('show', 'Location', 'best');    % 显示图例
+% 
+% % 其他图装饰
+% figure(fig_beta);
+% yline(0, 'k--', 'HandleVisibility', 'off');
+% legend('show', 'Location', 'best');
+% 
+% figure(fig_u);
+% legend('show', 'Location', 'best');
+% 
+% figure(fig_v);
+% yline(0, 'k--', 'HandleVisibility', 'off');
+% legend('show', 'Location', 'best');
+% 
+% figure(fig_psi);
+% legend('show', 'Location', 'best');
+% 
+% fprintf('仿真完成。\n');
